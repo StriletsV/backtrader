@@ -123,6 +123,10 @@ def test_run():
     # datapath = "C:\\Users\\User\\PycharmProjects\\backtrader\\data\\AMZN.csv"
     datapath = "C:\\Users\\User\\PycharmProjects\\backtrader\\data\\JISL.csv"
     # plot_symbols = []
+
+    tframes = dict(daily=bt.TimeFrame.Days, weekly=bt.TimeFrame.Weeks,
+                   monthly=bt.TimeFrame.Months)
+
     for s in symbols:
         # data = bt.feeds.YahooFinanceCSVData(dataname=datapath, fromdate=start, todate=end)  # , reverse=False)
         data = bt.feeds.GenericCSVData(dataname=datapath, dtformat='%Y-%m-%dT%H:%M:%S.%f', timeframe=bt.TimeFrame.Ticks)
@@ -136,9 +140,13 @@ def test_run():
             data.plotinfo.plot = False
         cerebro.adddata(data)  # Give the data to cerebro
 
+        # cerebro.resampledata(data, timeframe=tframes['daily'])
+
     cerebro.addobserver(AcctValue)
     cerebro.addstrategy(SMAC)
     cerebro.addsizer(PropSizer)
+
+    cerebro.addwriter(bt.WriterFile, csv=True, rounding=2,  out='logs\Vova_Test_1_results')
 
     print(f'\nChecking balance {cerebro.broker.getvalue()}')
     print('Starting test')
