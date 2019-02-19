@@ -27,6 +27,11 @@ from __future__ import (absolute_import, division, print_function,
 from .bbroker import BackBroker, BrokerBack
 
 try:
+    from .algbroker import AlgBroker, BrokerAlg
+except ImportError:
+    pass # The user may not have alg modules installed
+
+try:
     from .ibbroker import IBBroker
 except ImportError:
     pass  # The user may not have ibpy installed

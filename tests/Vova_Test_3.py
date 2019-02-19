@@ -34,9 +34,12 @@ class WriteQuotesInLog(bt.Strategy):
     params = dict(
         period=15,
         stake=1,
-        printout=True,
+        printout=False,
         onlylong=False,
         csvcross=False,
+        exectype='Market',
+        perc1=0.0,
+        valid=1
     )
 
     def start(self):
@@ -61,42 +64,82 @@ class WriteQuotesInLog(bt.Strategy):
         self.signal = btind.CrossOver(self.data.close, sma)
         self.signal.csv = self.p.csvcross
 
+        btind.SMA(self.data.pe, period=1, subplot=False)  # A way to draw the new data field on the chart
+
     def next(self):
-        self.log(f'Close: {self.data.close[0]}, pe: {self.data.pe[0]},  data: {type(self.data)}')
+        self.log(f'Tick... Close: {self.data.close[0]}, pe: {self.data.pe[0]},  date: {self.data.datetime[0]}')
         if self.orderid:
-            return  # if an order is active, no new orders are allowed
+            # An order is pending ... nothing can be done
+            return
 
         if self.signal > 0.0:  # cross upwards
             if self.position:
-                self.log('CLOSE SHORT , %.2f' % self.data.close[0])
+                self.log(f'CLOSING SHORT POSITION ({self.position}) at {self.data.close[0]} price')
                 self.close()
+            else:
+                if self.p.exectype == 'Market':
+                    self.buy(exectype=bt.Order.Market, size=self.p.stake)
 
-            self.log('BUY CREATE , %.2f' % self.data.close[0])
-            self.buy(size=self.p.stake)
+                    self.log(f'BUY CREATE, exectype Market, on {self.data.close[0]} price,'
+                             f' vol = {self.p.stake}')
+
+                elif self.p.exectype == 'Limit':
+
+                    price = self.data.close[0] * (1.0 - self.p.perc1 / 100.0) #or on bid1, bid2...
+
+                    if self.p.valid:
+                        valid = self.data.datetime.date(0) + datetime.timedelta(days=self.p.valid)
+                        txt = 'BUY CREATE, exectype Limit, price %.2f, valid: %s'
+                        self.log(txt % (price, valid.strftime('%Y-%m-%d')))
+                    else:
+                        valid = None
+                        txt = 'BUY CREATE, exectype Limit, price %.2f'
+                        self.log(txt % price)
+
+                    self.buy(exectype=bt.Order.Limit, price=price, size=self.p.stake, valid=valid)
 
         elif self.signal < 0.0:
             if self.position:
-                self.log('CLOSE LONG , %.2f' % self.data.close[0])
+                self.log(f'CLOSING LONG POSITION ({self.position}) at {self.data.close[0]} price')
                 self.close()
+            else:
+                if not self.p.onlylong:
+                    if self.p.exectype == 'Market':
+                        self.sell(exectype=bt.Order.Market, size=self.p.stake)
 
-            if not self.p.onlylong:
-                self.log('SELL CREATE , %.2f' % self.data.close[0])
-                self.sell(size=self.p.stake)
+                        self.log(f'BUY CREATE, exectype Market, on {self.data.close[0]} price,'
+                                 f' vol = {self.p.stake}')
+
+                    elif self.p.exectype == 'Limit':
+
+                        price = self.data.close[0] * (1.0 + self.p.perc1 / 100.0)  # or on bid1, bid2...
+
+                        if self.p.valid:
+                            valid = self.data.datetime.date(0) + datetime.timedelta(days=self.p.valid)
+                            txt = 'SELL CREATE, exectype Limit, price %.2f, valid: %s'
+                            self.log(txt % (price, valid.strftime('%Y-%m-%d')))
+                        else:
+                            valid = None
+                            txt = 'SELL CREATE, exectype Limit, price %.2f'
+                            self.log(txt % price)
+
+                        self.sell(exectype=bt.Order.Limit, price=price, size=self.p.stake, valid=valid)
 
     def notify_order(self, order):
         if order.status in [bt.Order.Submitted, bt.Order.Accepted]:
+            self.log(f'.. Order {order.Status[order.status]}, waiting...')  # : {order} - print whole order instance
             return  # Await further notifications
 
         if order.status == order.Completed:
             if order.isbuy():
-                buytxt = 'BUY COMPLETE, %.2f' % order.executed.price
+                buytxt = 'BUY COMPLETED, %.2f' % order.executed.price
                 self.log(buytxt, order.executed.dt)
             else:
-                selltxt = 'SELL COMPLETE, %.2f' % order.executed.price
+                selltxt = 'SELL COMPLETED, %.2f' % order.executed.price
                 self.log(selltxt, order.executed.dt)
 
         elif order.status in [order.Expired, order.Canceled, order.Margin]:
-            self.log('%s ,' % order.Status[order.status])
+            self.log('.. Order is %s ,' % order.Status[order.status])
             pass  # Simply log
 
         # Allow new orders
@@ -147,15 +190,25 @@ def runstrategy():
     data.plotinfo.plotmaster = data
 
     # Add the 1st data to cerebro
-    cerebro.adddata(data)
+
+    # cerebro.adddata(data)
+
+    cerebro.resampledata(data, timeframe=bt.TimeFrame.Minutes, compression=60)
 
     # Add the strategy
     cerebro.addstrategy(WriteQuotesInLog,
                         period=args.period,
                         onlylong=args.onlylong,
                         csvcross=args.csvcross,
-                        stake=args.stake)
+                        stake=args.stake,
+                        printout=args.printout,
+                        exectype=args.exectype,
+                        perc1=args.perc1,
+                        valid=args.valid
+                        )
 
+    broker = bt.brokers.AlgBroker()
+    cerebro.setbroker(broker)
     # Add the commission - only stocks like a for each operation
     cerebro.broker.setcash(args.cash)
 
@@ -166,9 +219,10 @@ def runstrategy():
 
     cerebro.addanalyzer(SQN)
 
-    cerebro.addwriter(bt.WriterFile, csv=args.writercsv, rounding=2, out='logs\Vova_Test_3_results')
+    cerebro.addwriter(bt.WriterFile, csv=args.writercsv, rounding=2, out=args.log_dir)
 
     # And run it
+    print(cerebro.getbroker())
     cerebro.run()
 
     # Plot if requested
@@ -197,8 +251,14 @@ def parse_args():
     parser.add_argument('--onlylong', '-ol', action='store_true',
                         help='Do only long operations')
 
+    parser.add_argument('--printout', '-pr', action='store_true',
+                        help='Print out log in console')
+
     parser.add_argument('--writercsv', '-wcsv', action='store_true',
                         help='Tell the writer to produce a csv stream')
+
+    parser.add_argument('--log_dir', default='logs\Vova_Test_3_result',
+                        help='Log file destination')
 
     parser.add_argument('--csvcross', action='store_true',
                         help='Output the CrossOver signals to CSV')
@@ -224,10 +284,23 @@ def parse_args():
     parser.add_argument('--numfigs', '-n', default=1,
                         help='Plot using numfigs figures')
 
+    parser.add_argument('--exectype', '-e', required=False, default='Market',
+                        help=('Execution Type: Market (default), Close, Limit,'
+                              ' Stop, StopLimit'))
+
+    parser.add_argument('--perc1', '-p1', required=False, default=0.01,
+                        type=float,
+                        help=('%% distance from close price at order creation'
+                              ' time for the limit/trigger price in Limit/Stop'
+                              ' orders'))
+
+    parser.add_argument('--valid', '-v', required=False, default=0, type=int,
+                        help='Validity for Limit sample: default 0 days')
+
     return parser.parse_args()
 
 
 if __name__ == '__main__':
-    sys.argv = [sys.argv[0], '-p', '-wcsv']
+    sys.argv = [sys.argv[0], '-p', '-wcsv', '-pr', '--stake', '1', '-e', 'Market']
 
     runstrategy()
